@@ -24,19 +24,18 @@ from joblib import Parallel, delayed
 ## Training LocalGP
 #############################################################################
 
-def train_one_column_StandardGP(local_train_x, local_train_y, covar_type = 'RBF', lr=0.05, num_iterations=5000, patience=10, device='cpu'):
+def train_one_column_StandardGP(local_train_x, local_train_y, covar_type='RBF', lr=0.05, 
+                                  num_iterations=5000, patience=10, device='cpu', use_amp=False):
+
+    device = torch.device(device)
+    if device.type == 'cuda':
+        torch.backends.cudnn.benchmark = True
 
     local_train_x = local_train_x.to(device)
     local_train_y = local_train_y.to(device)
 
-    # local_train_y_column = local_train_y[:, column_idx]
-
-    likelihood = gpytorch.likelihoods.GaussianLikelihood()
-    model = GP_models.StandardGP(local_train_x, local_train_y, likelihood, covar_type)
-
-
-    model = model.to(device)
-    likelihood = likelihood.to(device)
+    likelihood = gpytorch.likelihoods.GaussianLikelihood().to(device)
+    model = GP_models.StandardGP(local_train_x, local_train_y, likelihood, covar_type).to(device)
 
     model.train()
     likelihood.train()
@@ -45,25 +44,37 @@ def train_one_column_StandardGP(local_train_x, local_train_y, covar_type = 'RBF'
     mll = gpytorch.mlls.ExactMarginalLogLikelihood(likelihood, model)
 
     best_loss = float('inf')
-    counter = 0
+    patience_counter = 0
+    best_state = None
+
+
+    scaler = torch.cuda.amp.GradScaler() if device.type == 'cuda' and use_amp else None
+    autocast_enabled = scaler is not None
+
     iterator = tqdm.tqdm(range(num_iterations))
-
-    for i in iterator:
-    # for i in range(num_iterations):
+    for epoch in iterator:
         optimizer.zero_grad()
-        output = model(local_train_x)
-        loss = -mll(output, local_train_y)
-        loss.backward()
-        iterator.set_postfix(loss=loss.item())
-        optimizer.step()
-
-        if loss.item() <= best_loss:
-            best_loss = loss.item()
-            best_state = model.state_dict()
-            counter = 0
+        with torch.amp.autocast('cuda', enabled=autocast_enabled):
+            output = model(local_train_x)
+            loss = -mll(output, local_train_y)
+        if scaler:
+            scaler.scale(loss).backward()
+            scaler.step(optimizer)
+            scaler.update()
         else:
-            counter += 1
-            if counter >= patience:
+            loss.backward()
+            optimizer.step()
+
+        iterator.set_postfix(loss=loss.item())
+
+        current_loss = loss.item()
+        if current_loss < best_loss:
+            best_loss = current_loss
+            best_state = model.state_dict()
+            patience_counter = 0
+        else:
+            patience_counter += 1
+            if patience_counter >= patience:
                 model.load_state_dict(best_state)
                 break
 
@@ -71,15 +82,17 @@ def train_one_column_StandardGP(local_train_x, local_train_y, covar_type = 'RBF'
 
 
 
-def train_one_row_StandardGP(train_x, train_y, covar_type = 'RBF', lr=0.05, num_iterations=5000, patience=10, device='cpu'):
-    # Train the all columns of the output
+
+def train_one_row_StandardGP(train_x, train_y, covar_type='RBF', lr=0.05, num_iterations=5000, patience=10, device='cpu'):
+
     Models = []
     Likelihoods = []
     for column_idx in range(train_y.shape[1]):
-        model, likelihood = train_one_column_StandardGP(train_x, train_y[:column_idx].squeeze(), covar_type, lr, num_iterations, patience, device)
+
+        model, likelihood = train_one_column_StandardGP(train_x, train_y[:, column_idx].squeeze(), covar_type, lr, num_iterations, patience, device)
         Models.append(model)
         Likelihoods.append(likelihood)
-    return Models, Likelihoods
+    return Models.to(device), Likelihoods.to(device)
 
 
 def train_one_row_StandardGP_Parallel(train_x, train_y, covar_type = 'RBF', lr=0.05, num_iterations=5000, patience=10, device='cpu'):

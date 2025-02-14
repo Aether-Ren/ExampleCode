@@ -17,21 +17,41 @@ import gpytorch
 ## 
 #############################################################################
 
-def preds_for_one_model(model, likelihood, xxx):
-    # Prediction of a column of the local data
-
+def preds_for_one_model(model, likelihood, xxx, device='cpu'):
     model.eval()
     likelihood.eval()
-    # with torch.no_grad(),gpytorch.settings.fast_pred_var():
+    model = model.to(device)
+    likelihood = likelihood.to(device)
+    xxx = xxx.to(device)
+    # with torch.no_grad():
     preds = likelihood(model(xxx)).mean
     return preds
 
-def full_preds(models, likelihoods, xxx):
-    # Use the GP model to get a complete prediction of the output
-    # input_point = input_point.unsqueeze(0)
-    full_preds_point = preds_for_one_model(models[0], likelihoods[0], xxx).unsqueeze(1)
+def full_preds(models, likelihoods, xxx, device='cpu'):
+
+    full_preds_point = preds_for_one_model(models[0], likelihoods[0], xxx, device).unsqueeze(1)
     for i in range(1, len(models)):
-        preds = preds_for_one_model(models[i], likelihoods[i],xxx).unsqueeze(1)
+        preds = preds_for_one_model(models[i], likelihoods[i], xxx, device).unsqueeze(1)
         full_preds_point = torch.cat((full_preds_point, preds), 1)
     return full_preds_point.squeeze()
+
+
+
+# def preds_for_one_model(model, likelihood, xxx):
+#     # Prediction of a column of the local data
+
+#     model.eval()
+#     likelihood.eval()
+#     # with torch.no_grad(),gpytorch.settings.fast_pred_var():
+#     preds = likelihood(model(xxx)).mean
+#     return preds
+
+# def full_preds(models, likelihoods, xxx):
+#     # Use the GP model to get a complete prediction of the output
+#     # input_point = input_point.unsqueeze(0)
+#     full_preds_point = preds_for_one_model(models[0], likelihoods[0], xxx).unsqueeze(1)
+#     for i in range(1, len(models)):
+#         preds = preds_for_one_model(models[i], likelihoods[i],xxx).unsqueeze(1)
+#         full_preds_point = torch.cat((full_preds_point, preds), 1)
+#     return full_preds_point.squeeze()
 
