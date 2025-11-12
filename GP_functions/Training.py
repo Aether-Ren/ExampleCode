@@ -109,3 +109,48 @@ def train_one_row_StandardGP_Parallel(train_x, train_y, covar_type = 'RBF', lr=0
     return list(Models), list(Likelihoods)
 
 
+
+
+def train_one_row_MultitaskGP(local_train_x, local_train_y, n_tasks, covar_type = 'RBF', lr=0.05, num_iterations=5000, patience=10, device='cpu', disable_progbar=True):
+
+    local_train_x = local_train_x.to(device)
+    local_train_y = local_train_y.to(device)
+
+
+    likelihood = gpytorch.likelihoods.MultitaskGaussianLikelihood(num_tasks=n_tasks)
+    model = GP_models.MultitaskGPModel(local_train_x, local_train_y, likelihood, n_tasks, covar_type)
+
+    model = model.to(device)
+    likelihood = likelihood.to(device)
+
+    model.train()
+    likelihood.train()
+
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+    mll = gpytorch.mlls.ExactMarginalLogLikelihood(likelihood, model)
+    
+    best_loss = float('inf')
+    counter = 0
+    iterator = tqdm.tqdm(range(num_iterations), disable=disable_progbar)
+
+    for i in iterator:
+    # for i in range(num_iterations):
+        optimizer.zero_grad()
+        output = model(local_train_x)
+        loss = -mll(output, local_train_y)
+        loss.backward()
+        if not disable_progbar:
+            iterator.set_postfix(loss=loss.item())
+        optimizer.step()
+
+        if loss <= best_loss:
+            best_loss = loss
+            best_state = model.state_dict()  
+            counter = 0
+        else:
+            counter += 1
+            if counter >= patience:
+                model.load_state_dict(best_state)  
+                break
+
+    return model, likelihood

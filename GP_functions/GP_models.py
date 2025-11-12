@@ -14,7 +14,8 @@ import gpytorch
 
 
 #############################################################################
-## Set up the model structure (LocalGP, SparseGP, MultitaskGP)
+## Set up the model structure (LocalGP, MultitaskGP)
+## ARD may be omitted entirely by deleting the ard_num_dims=train_x.size(-1); the default code does not activate ARD.
 #############################################################################
 
 ## LocalGP
@@ -47,20 +48,59 @@ class StandardGP(gpytorch.models.ExactGP):
 
 
 
-# class BatchIndependentLocalGP(gpytorch.models.ExactGP):
-#     def __init__(self, train_x, train_y, likelihood):
-#         super(BatchIndependentLocalGP, self).__init__(train_x, train_y, likelihood)
-#         self.mean_module = gpytorch.means.ConstantMean(batch_shape=torch.Size([train_y.shape[1]]))
-#         self.covar_module = gpytorch.kernels.ScaleKernel(
-#             gpytorch.kernels.RBFKernel(ard_num_dims=train_x.size(-1), batch_shape=torch.Size([train_y.shape[1]])),
-#             batch_shape=torch.Size([train_y.shape[1]])
-#         )
+class BatchIndependentLocalGP(gpytorch.models.ExactGP):
+    def __init__(self, train_x, train_y, likelihood):
+        super(BatchIndependentLocalGP, self).__init__(train_x, train_y, likelihood)
+        self.mean_module = gpytorch.means.ConstantMean(batch_shape=torch.Size([train_y.shape[1]]))
+        self.covar_module = gpytorch.kernels.ScaleKernel(
+            gpytorch.kernels.RBFKernel(ard_num_dims=train_x.size(-1), batch_shape=torch.Size([train_y.shape[1]])),
+            batch_shape=torch.Size([train_y.shape[1]])
+        )
 
-#     def forward(self, x):
-#         mean_x = self.mean_module(x)
-#         covar_x = self.covar_module(x)
-#         return gpytorch.distributions.MultitaskMultivariateNormal.from_batch_mvn(
-#             gpytorch.distributions.MultivariateNormal(mean_x, covar_x)
-#         )
+    def forward(self, x):
+        mean_x = self.mean_module(x)
+        covar_x = self.covar_module(x)
+        return gpytorch.distributions.MultitaskMultivariateNormal.from_batch_mvn(
+            gpytorch.distributions.MultivariateNormal(mean_x, covar_x)
+        )
 
 
+class MultitaskGPModel(gpytorch.models.ExactGP):
+    def __init__(self, train_x, train_y, likelihood, n_tasks, covar_type = 'RBF'):
+        super(MultitaskGPModel, self).__init__(train_x, train_y, likelihood)
+        self.mean_module = gpytorch.means.MultitaskMean(
+            gpytorch.means.ConstantMean(), num_tasks=n_tasks
+        )
+        # self.covar_module = gpytorch.kernels.MultitaskKernel(
+        #     gpytorch.kernels.RBFKernel(ard_num_dims=train_x.size(-1)), 
+        #     num_tasks=n_tasks, rank=1
+        # )
+
+        if covar_type == 'RBF':
+            self.covar_module = gpytorch.kernels.MultitaskKernel(
+                gpytorch.kernels.RBFKernel(ard_num_dims=train_x.size(-1)), 
+                num_tasks=n_tasks, rank=1)
+        elif covar_type == 'Matern5/2':
+            self.covar_module = gpytorch.kernels.MultitaskKernel(
+                gpytorch.kernels.MaternKernel(nu=2.5,ard_num_dims=train_x.size(-1)), 
+                num_tasks=n_tasks, rank=1)
+        elif covar_type == 'Matern3/2':
+            self.covar_module = gpytorch.kernels.MultitaskKernel(
+                gpytorch.kernels.MaternKernel(nu=1.5,ard_num_dims=train_x.size(-1)), 
+                num_tasks=n_tasks, rank=1)
+        elif covar_type == 'RQ':
+            self.covar_module = gpytorch.kernels.MultitaskKernel(
+                gpytorch.kernels.RQKernel(ard_num_dims=train_x.size(-1)), 
+                num_tasks=n_tasks, rank=1)
+        elif covar_type == 'PiecewisePolynomial':
+            self.covar_module = gpytorch.kernels.MultitaskKernel(
+                gpytorch.kernels.PiecewisePolynomialKernel(q=2, ard_num_dims=train_x.size(-1)), 
+                num_tasks=n_tasks, rank=1)
+        else:
+            print('You should choose one of these kernels (RBF, Matern5/2, Matern3/2, RQ, PiecewisePolynomial)')
+
+
+    def forward(self, x):
+        mean_x = self.mean_module(x)
+        covar_x = self.covar_module(x)
+        return gpytorch.distributions.MultitaskMultivariateNormal(mean_x, covar_x)
